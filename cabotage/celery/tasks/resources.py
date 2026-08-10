@@ -6,13 +6,23 @@ import hmac
 import logging
 import secrets
 import struct
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast, overload
 from collections.abc import Mapping, Callable
 
-import kubernetes
 from celery import shared_task
 from flask import current_app, has_app_context
 from kubernetes.client.exceptions import ApiException
+from kubernetes.client.api_client import ApiClient
+from kubernetes.client import (
+    AppsV1Api,
+    CoreV1Api,
+    CustomObjectsApi,
+    NetworkingV1Api,
+    RbacAuthorizationV1Api,
+    V1ObjectMeta,
+    V1Secret,
+    V1ServiceAccount,
+)
 from sqlalchemy import text
 
 from cabotage.server import (
@@ -32,7 +42,12 @@ from cabotage.server.models.utils import safe_k8s_name
 from cabotage.celery.tasks.deploy import ensure_namespace, ensure_network_policies
 
 if TYPE_CHECKING:
+    from typing import Any
+
+    from kubernetes.client import V1Pod
     from sqlalchemy import Connection
+
+    from cabotage._types.server import ConfigDict
     from cabotage._types.tasks import (
         BackingServicePodAnnotations,
         BackupSettings,
@@ -146,7 +161,7 @@ def _serialize_k8s_object(obj):
         return [_serialize_k8s_object(item) for item in obj]
     if isinstance(obj, Mapping):
         return {key: _serialize_k8s_object(value) for key, value in obj.items()}
-    return kubernetes.client.ApiClient().sanitize_for_serialization(obj)
+    return ApiClient().sanitize_for_serialization(obj)
 
 
 def _extract_desired_subset(current, desired):
@@ -212,7 +227,7 @@ def _resource_env_config_is_current(config, value, secret):
     return config.secret_fingerprint == _secret_fingerprint(value)
 
 
-def _is_legacy_resource_url_config(name):
+def _is_legacy_resource_url_config(name: str) -> bool:
     return name.endswith("_DATABASE_URL") or name.endswith("_REDIS_URL")
 
 
@@ -260,7 +275,7 @@ def _password_secret_name(resource: Resource) -> str:
 def _backing_services_pool() -> str | None:
     if not has_app_context():
         return None
-    return current_app.config.get("BACKING_SERVICES_POOL") or None
+    return cast("ConfigDict", current_app.config).get("BACKING_SERVICES_POOL") or None
 
 
 def _backing_service_type_enabled(resource_type: str) -> bool:
@@ -272,13 +287,15 @@ def _backing_service_type_enabled(resource_type: str) -> bool:
         raise KeyError(f"Unknown backing service type: {resource_type}")
     if not has_app_context():
         return True
-    return current_app.config.get(config_key, True)
+    return cast("ConfigDict", current_app.config).get(config_key, True)
 
 
 def _tenant_postgres_backups_enabled(resource: PostgresResource | None = None) -> bool:
     if not has_app_context():
         return False
-    if not current_app.config.get("TENANT_POSTGRES_BACKUPS_ENABLED"):
+    if not cast("ConfigDict", current_app.config).get(
+        "TENANT_POSTGRES_BACKUPS_ENABLED"
+    ):
         return False
     if resource is not None and getattr(resource, "backup_strategy", None) == "none":
         return False
@@ -293,36 +310,38 @@ def _tenant_postgres_backup_settings() -> BackupSettings | None:
     if not _tenant_postgres_backups_enabled():
         return None
 
-    validate_tenant_postgres_backup_config(current_app.config)
+    current_app_config = cast("ConfigDict", current_app.config)
+
+    validate_tenant_postgres_backup_config(current_app_config)
 
     return {
-        "provider": current_app.config["TENANT_POSTGRES_BACKUP_PROVIDER"]
+        "provider": current_app_config["TENANT_POSTGRES_BACKUP_PROVIDER"]
         .strip()
         .lower(),
-        "bucket": current_app.config["TENANT_POSTGRES_BACKUP_BUCKET"],
-        "irsa_role_arn": current_app.config.get("TENANT_POSTGRES_BACKUP_IRSA_ROLE_ARN"),
-        "path_prefix": current_app.config["TENANT_POSTGRES_BACKUP_PATH_PREFIX"],
-        "plugin_name": current_app.config["TENANT_POSTGRES_BACKUP_PLUGIN_NAME"],
-        "retention_policy": current_app.config[
+        "bucket": current_app_config["TENANT_POSTGRES_BACKUP_BUCKET"],
+        "irsa_role_arn": current_app_config.get("TENANT_POSTGRES_BACKUP_IRSA_ROLE_ARN"),
+        "path_prefix": current_app_config["TENANT_POSTGRES_BACKUP_PATH_PREFIX"],
+        "plugin_name": current_app_config["TENANT_POSTGRES_BACKUP_PLUGIN_NAME"],
+        "retention_policy": current_app_config[
             "TENANT_POSTGRES_BACKUP_RETENTION_POLICY"
         ],
-        "schedule": current_app.config["TENANT_POSTGRES_BACKUP_SCHEDULE"],
-        "service_account_name": current_app.config[
+        "schedule": current_app_config["TENANT_POSTGRES_BACKUP_SCHEDULE"],
+        "service_account_name": current_app_config[
             "TENANT_POSTGRES_BACKUP_SERVICE_ACCOUNT_NAME"
         ],
-        "rustfs_endpoint": current_app.config.get(
+        "rustfs_endpoint": current_app_config.get(
             "TENANT_POSTGRES_BACKUP_RUSTFS_ENDPOINT"
         ),
-        "rustfs_ca_secret_name": current_app.config.get(
+        "rustfs_ca_secret_name": current_app_config.get(
             "TENANT_POSTGRES_BACKUP_RUSTFS_CA_SECRET_NAME"
         ),
-        "rustfs_secret_name": current_app.config.get(
+        "rustfs_secret_name": current_app_config.get(
             "TENANT_POSTGRES_BACKUP_RUSTFS_SECRET_NAME"
         ),
-        "rustfs_source_secret_name": current_app.config.get(
+        "rustfs_source_secret_name": current_app_config.get(
             "TENANT_POSTGRES_BACKUP_RUSTFS_SOURCE_SECRET_NAME"
         ),
-        "rustfs_source_secret_namespace": current_app.config.get(
+        "rustfs_source_secret_namespace": current_app_config.get(
             "TENANT_POSTGRES_BACKUP_RUSTFS_SOURCE_SECRET_NAMESPACE"
         ),
     }
@@ -508,7 +527,7 @@ def _render_scheduled_backup(
 
 
 def _ensure_scheduled_backup(
-    custom_api: kubernetes.client.CustomObjectsApi,
+    custom_api: CustomObjectsApi,
     namespace: str,
     resource: Resource,
     settings: BackupSettings,
@@ -776,7 +795,7 @@ def _render_redis_certificate(resource: RedisResource) -> RedisCertificate:
 
 
 def _ensure_certificate(
-    custom_api: kubernetes.client.CustomObjectsApi,
+    custom_api: CustomObjectsApi,
     namespace: str,
     cert_body: RedisCertificate,
 ) -> None:
@@ -803,8 +822,8 @@ def _ensure_password_secret(core_api, namespace, secret_name, labels):
             password = secrets.token_urlsafe(48)
             core_api.create_namespaced_secret(
                 namespace,
-                kubernetes.client.V1Secret(
-                    metadata=kubernetes.client.V1ObjectMeta(
+                V1Secret(
+                    metadata=V1ObjectMeta(
                         name=secret_name,
                         namespace=namespace,
                         labels=labels,
@@ -818,14 +837,14 @@ def _ensure_password_secret(core_api, namespace, secret_name, labels):
 
 
 def _ensure_custom_object(
-    custom_api: kubernetes.client.CustomObjectsApi,
+    custom_api: CustomObjectsApi,
     group: str,
     version: str,
     namespace: str,
     plural: str,
     name: str,
-    # FIXME: wrong type
-    body: RedisCertificate,
+    # FIXME: union of actual types
+    body: Any,
     # FIXME: missing type
     create_body=None,
 ):
@@ -865,7 +884,7 @@ def _ensure_custom_object(
         log.info("Created %s/%s %s/%s", group, plural, namespace, name)
 
 
-def _ensure_ca_secret(core_api: kubernetes.client.CoreV1Api, namespace: str) -> None:
+def _ensure_ca_secret(core_api: CoreV1Api, namespace: str) -> None:
     """Copy the operators CA certificate secret into the target namespace.
 
     CNPG requires the CA secret (operators-ca-crt) to be present in the
@@ -873,8 +892,8 @@ def _ensure_ca_secret(core_api: kubernetes.client.CoreV1Api, namespace: str) -> 
     cert-manager namespace.  Always syncs from source to pick up rotations.
     """
     source = core_api.read_namespaced_secret(TLS_CA_SECRET, "cert-manager")
-    body = kubernetes.client.V1Secret(
-        metadata=kubernetes.client.V1ObjectMeta(
+    body = V1Secret(
+        metadata=V1ObjectMeta(
             name=TLS_CA_SECRET,
             namespace=namespace,
             labels={"cnpg.io/reload": ""},
@@ -895,13 +914,16 @@ def _ensure_ca_secret(core_api: kubernetes.client.CoreV1Api, namespace: str) -> 
             raise
 
 
-def _ensure_backup_service_account(core_api, namespace, settings):
-    annotations = {}
+def _ensure_backup_service_account(
+    core_api: CoreV1Api, namespace: str, settings: BackupSettings
+):
+    annotations: dict[str, str] = {}
     if settings["provider"] == "s3":
+        assert settings["irsa_role_arn"]
         annotations["eks.amazonaws.com/role-arn"] = settings["irsa_role_arn"]
 
-    body = kubernetes.client.V1ServiceAccount(
-        metadata=kubernetes.client.V1ObjectMeta(
+    body = V1ServiceAccount(
+        metadata=V1ObjectMeta(
             name=settings["service_account_name"],
             namespace=namespace,
             annotations=annotations or None,
@@ -944,8 +966,8 @@ def _ensure_rustfs_secret(core_api, namespace, settings):
             + ", ".join(sorted(missing_keys))
         )
 
-    body = kubernetes.client.V1Secret(
-        metadata=kubernetes.client.V1ObjectMeta(
+    body = V1Secret(
+        metadata=V1ObjectMeta(
             name=settings["rustfs_secret_name"],
             namespace=namespace,
         ),
@@ -975,7 +997,7 @@ def _ensure_rustfs_secret(core_api, namespace, settings):
 
 
 def _sync_barman_rolebinding_subject(
-    rbac_api: kubernetes.client.RbacAuthorizationV1Api | None,
+    rbac_api: RbacAuthorizationV1Api | None,
     namespace: str,
     cluster_name: str,
     service_account_name: str,
@@ -1027,7 +1049,7 @@ def _sync_barman_rolebinding_subject(
 
 
 def _delete_k8s_resource_quiet[**P](
-    fn: Callable[P, None], *args: P.args, **kwargs: P.kwargs
+    fn: Callable[P, object], *args: P.args, **kwargs: P.kwargs
 ) -> None:
     """Call a K8s delete function, ignoring 404."""
     try:
@@ -1041,9 +1063,35 @@ def _zero_if_none(value: int | None) -> int:
     return value if value is not None else 0
 
 
-def _field[T](
-    obj: object | dict[str, T] | None, name: str, default: T | None = None
-) -> T | None:
+@overload
+def _field[T, D](
+    obj: dict[str, T] | None,
+    name: str,
+    default: D,
+) -> T | D: ...
+
+
+@overload
+def _field(
+    obj: object | None,
+    name: str,
+    default: None = None,
+) -> Any: ...
+
+
+@overload
+def _field[D](
+    obj: object | None,
+    name: str,
+    default: D,
+) -> Any | D: ...
+
+
+def _field(
+    obj: object | None,
+    name: str,
+    default: object | None = None,
+) -> Any:
     if obj is None:
         return default
     if isinstance(obj, dict):
@@ -1077,7 +1125,7 @@ def _container_failure_reason(container_statuses):
     return None
 
 
-def _pod_is_ready(pod) -> bool:
+def _pod_is_ready(pod: V1Pod | None) -> bool:
     if pod is None:
         return False
     if _field(_field(pod, "metadata"), "deletion_timestamp") is not None:
@@ -1087,7 +1135,9 @@ def _pod_is_ready(pod) -> bool:
     return _condition_is_true(_field(_field(pod, "status"), "conditions"), "Ready")
 
 
-def _read_postgres_cluster_status(custom_api, namespace, name):
+def _read_postgres_cluster_status(
+    custom_api: CustomObjectsApi, namespace: str, name: str
+) -> PostgresClusterStatus | None:
     try:
         cluster = custom_api.get_namespaced_custom_object(
             CNPG_GROUP,
@@ -1123,7 +1173,10 @@ def _postgres_cluster_has_plugin(status, plugin_name) -> bool:
 
 
 def _postgres_cluster_is_backup_ready(
-    status, expected_instances, plugin_name, require_continuous_archiving: bool = True
+    status: PostgresClusterStatus,
+    expected_instances,
+    plugin_name,
+    require_continuous_archiving: bool = True,
 ):
     if not _postgres_cluster_is_ready(status, expected_instances):
         return False
@@ -1134,9 +1187,7 @@ def _postgres_cluster_is_backup_ready(
     return _postgres_cluster_has_plugin(status, plugin_name)
 
 
-def _read_redis_cluster_status(
-    custom_api: kubernetes.client.CustomObjectsApi, namespace: str, name: str
-):
+def _read_redis_cluster_status(custom_api: CustomObjectsApi, namespace: str, name: str):
     try:
         cluster = custom_api.get_namespaced_custom_object(
             REDIS_GROUP,
@@ -1176,7 +1227,7 @@ def _redis_cluster_health(
 
 
 def _read_redis_standalone_health(
-    core_api: kubernetes.client.CoreV1Api, namespace: str, name: str
+    core_api: CoreV1Api, namespace: str, name: str
 ) -> tuple[HealthStatus, str | None]:
     try:
         pod = core_api.read_namespaced_pod(f"{name}-0", namespace)
@@ -1391,10 +1442,10 @@ def _render_redis_cluster(resource: RedisResource) -> RedisCluster:
 
 def _reconcile_postgres(
     resource: PostgresResource,
-    core_api: kubernetes.client.CoreV1Api,
-    custom_api: kubernetes.client.CustomObjectsApi,
-    apps_api: kubernetes.client.AppsV1Api | None = None,
-    rbac_api: kubernetes.client.RbacAuthorizationV1Api | None = None,
+    core_api: CoreV1Api,
+    custom_api: CustomObjectsApi,
+    apps_api: AppsV1Api | None = None,
+    rbac_api: RbacAuthorizationV1Api | None = None,
 ) -> None:
     """Converge a single PostgresResource to its desired K8s state."""
     namespace = _resource_namespace(resource)
@@ -1407,6 +1458,7 @@ def _reconcile_postgres(
     backup_settings = None
     if _tenant_postgres_backups_enabled(resource):
         backup_settings = _tenant_postgres_backup_settings()
+        assert backup_settings
         _ensure_backup_service_account(core_api, namespace, backup_settings)
         if backup_settings["provider"] == "rustfs":
             _ensure_rustfs_secret(core_api, namespace, backup_settings)
@@ -1469,11 +1521,13 @@ def _reconcile_postgres(
     _set_if_changed(resource, "connection_info", connection_info)
 
     status = _read_postgres_cluster_status(custom_api, namespace, name)
+    assert status
 
     # Read password from CNPG-generated secret (created by operator
     # once the cluster is healthy — may not exist yet)
     try:
         pg_secret = core_api.read_namespaced_secret(f"{name}-app", namespace)
+        assert pg_secret.data
         pg_password = base64.b64decode(pg_secret.data["password"]).decode()
         _sync_resource_env_configs(
             resource,
@@ -1510,10 +1564,10 @@ def _reconcile_postgres(
 
 def _reconcile_redis(
     resource: RedisResource,
-    core_api: kubernetes.client.CoreV1Api,
-    custom_api: kubernetes.client.CustomObjectsApi,
-    apps_api: kubernetes.client.AppsV1Api | None = None,
-    rbac_api: kubernetes.client.RbacAuthorizationV1Api | None = None,
+    core_api: CoreV1Api,
+    custom_api: CustomObjectsApi,
+    apps_api: AppsV1Api | None = None,
+    rbac_api: RbacAuthorizationV1Api | None = None,
 ) -> None:
     """Converge a single RedisResource to its desired K8s state."""
     namespace = _resource_namespace(resource)
@@ -1555,6 +1609,7 @@ def _reconcile_redis(
     password_secret = core_api.read_namespaced_secret(
         _password_secret_name(resource), namespace
     )
+    assert password_secret.data
     password = base64.b64decode(password_secret.data["password"]).decode()
 
     host = _redis_service_host(resource, namespace, name)
@@ -1591,10 +1646,10 @@ def _reconcile_redis(
 
 def _delete_postgres(
     resource: PostgresResource,
-    core_api: kubernetes.client.CoreV1Api,
-    custom_api: kubernetes.client.CustomObjectsApi,
-    apps_api: kubernetes.client.AppsV1Api | None = None,
-    rbac_api: kubernetes.client.RbacAuthorizationV1Api | None = None,
+    core_api: CoreV1Api,
+    custom_api: CustomObjectsApi,
+    apps_api: AppsV1Api | None = None,
+    rbac_api: RbacAuthorizationV1Api | None = None,
 ) -> None:
     """Remove all K8s objects for a deleted PostgresResource."""
     namespace = _resource_namespace(resource)
@@ -1643,10 +1698,10 @@ def _delete_postgres(
 
 def _delete_redis(
     resource: RedisResource,
-    core_api: kubernetes.client.CoreV1Api,
-    custom_api: kubernetes.client.CustomObjectsApi,
-    apps_api: kubernetes.client.AppsV1Api | None = None,
-    rbac_api: kubernetes.client.RbacAuthorizationV1Api | None = None,
+    core_api: CoreV1Api,
+    custom_api: CustomObjectsApi,
+    apps_api: AppsV1Api | None = None,
+    rbac_api: RbacAuthorizationV1Api | None = None,
 ) -> None:
     """Remove all K8s objects for a deleted RedisResource."""
     namespace = _resource_namespace(resource)
@@ -1716,11 +1771,11 @@ def reconcile_backing_services() -> None:
             return
 
         api_client = kubernetes_ext.kubernetes_client
-        core_api = kubernetes.client.CoreV1Api(api_client)
-        custom_api = kubernetes.client.CustomObjectsApi(api_client)
-        apps_api = kubernetes.client.AppsV1Api(api_client)
-        rbac_api = kubernetes.client.RbacAuthorizationV1Api(api_client)
-        networking_api = kubernetes.client.NetworkingV1Api(api_client)
+        core_api = CoreV1Api(api_client)
+        custom_api = CustomObjectsApi(api_client)
+        apps_api = AppsV1Api(api_client)
+        rbac_api = RbacAuthorizationV1Api(api_client)
+        networking_api = NetworkingV1Api(api_client)
 
         for resource in resources:
             resource_type = resource.type

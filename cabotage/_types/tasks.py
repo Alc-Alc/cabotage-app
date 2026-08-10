@@ -205,38 +205,38 @@ if TYPE_CHECKING:
     class BackupSettings(TypedDict):
         provider: str
         bucket: str
-        irsa_role_arn: str
+        irsa_role_arn: str | None
         path_prefix: str
         plugin_name: str
         retention_policy: str
         schedule: str
         service_account_name: str
-        rustfs_endpoint: str
-        rustfs_ca_secret_name: str
-        rustfs_secret_name: str
-        rustfs_source_secret_name: str
-        rustfs_source_secret_namespace: str
+        rustfs_endpoint: str | None
+        rustfs_ca_secret_name: str | None
+        rustfs_secret_name: str | None
+        rustfs_source_secret_name: str | None
+        rustfs_source_secret_namespace: str | None
 
     type HealthStatus = Literal["provisioning", "ready", "error"]
 
-    class PostgresClusterStatus(TypedDict):
+    class PostgresClusterStatus(TypedDict, total=False):
         conditions: str
-        readyInstances: int | None
+        readyInstances: int
         reason: str
 
     class Compression(TypedDict):
         compression: str
 
     class AccessKeyId(TypedDict):
-        name: str
+        name: str | None
         key: Literal["access-key-id"]
 
     class SecretAccessKey(TypedDict):
-        name: str
+        name: str | None
         key: Literal["secret-key"]
 
     class Region(TypedDict):
-        name: str
+        name: str | None
         key: Literal["region"]
 
     class S3Credentials(TypedDict, total=False):
@@ -246,15 +246,15 @@ if TYPE_CHECKING:
         region: Region
 
     class EndpointCA(TypedDict):
-        name: str
-        key: str
+        name: str | None
+        key: Literal["ca.crt"]
 
     class PostgresConfig(TypedDict):
         destinationPath: str
         data: Compression
         wal: Compression
         s3Credentials: NotRequired[S3Credentials]
-        endpointURL: NotRequired[str]
+        endpointURL: NotRequired[str | None]
         endpointCA: NotRequired[EndpointCA]
 
     class PostgresSpec(TypedDict):

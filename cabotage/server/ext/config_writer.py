@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from cabotage._types.server import TypedFlask
     from cabotage.server.ext.vault import Vault
     from cabotage.server.ext.consul import Consul
-    from cabotage.server.models.projects import Configuration
+    from cabotage.server.models.projects import Configuration, EnvironmentConfiguration
 
 
 class KeySlug(TypedDict):
@@ -45,7 +45,7 @@ class ConfigWriter(object):
         self,
         k8s_namespace: str,
         k8s_resource_prefix: str,
-        configuration: Configuration,
+        configuration: Configuration | EnvironmentConfiguration,
     ) -> KeySlug:
         version = configuration.version_id + 1 if configuration.version_id else 1
         path_segment = self._config_path_segment(k8s_namespace, k8s_resource_prefix)

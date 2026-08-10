@@ -47,8 +47,11 @@ def jwks_json() -> str:
     """
     transit_path = f"{vault.vault_signing_mount}/keys/{vault.vault_signing_key}"
     key_data = vault.vault_connection.read(transit_path)
-    keys = []
-    for _version, key_info in key_data["data"]["keys"].items():
+    keys: list[dict[str, str]] = []
+    if not isinstance(key_data, dict):
+        raise Exception("invalid response not handled")
+    # FIXME: temporary; newer versions don't need this, but `exclude-newer` means the fix needs time to reach the installable version
+    for _version, key_info in key_data["data"]["keys"].items():  # ty: ignore[invalid-argument-type, not-subscriptable]
         public_key_pem = key_info["public_key"].encode()
         keys.append(public_key_to_jwk(public_key_pem))
     return json.dumps({"keys": keys})

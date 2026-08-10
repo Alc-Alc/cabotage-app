@@ -181,7 +181,7 @@ def repository_by_name(
         return None
     for repository in app_installation.repositories or []:
         if repository.get("full_name") == repository_name:
-            return repository
+            return cast("RepositoryMetadata", repository)
     return None
 
 
@@ -207,6 +207,7 @@ def repository_by_id(
     except (TypeError, ValueError):
         return None
     for repository in app_installation.repositories or []:
+        repository = cast("RepositoryMetadata", repository)
         if repository_id(repository) == repo_id:
             return repository
     return None
@@ -219,6 +220,9 @@ def repository_options_by_installation(
     for installation in organization.github_app_installations:
         if installation.repositories is None:
             continue
+        installation_repositories = cast(
+            "list[RepositoryMetadata]", installation.repositories
+        )
         options[str(installation.installation_id)] = [
             {
                 "id": repository.get("id"),
@@ -226,7 +230,7 @@ def repository_options_by_installation(
                 "private": bool(repository.get("private")),
             }
             for repository in sorted(
-                installation.repositories or [],
+                installation_repositories or [],
                 key=lambda repo: repo.get("full_name") or "",
             )
             if repository.get("full_name")
@@ -279,7 +283,9 @@ def sync_installation_repositories(
             app_installation.repositories_synced_at = None
         return False
 
-    app_installation.repositories = merge_repository_metadata([], repositories)
+    app_installation.repositories = cast(
+        list[dict[str, object]], merge_repository_metadata([], repositories)
+    )
     app_installation.repositories_synced_at = datetime.datetime.now(
         datetime.timezone.utc
     ).replace(tzinfo=None)
@@ -293,14 +299,18 @@ def sync_application_repository_metadata(
     if app_installation.repositories is None:
         return 0
 
+    app_installation_repositories = cast(
+        "list[RepositoryMetadata]", app_installation.repositories
+    )
+
     repositories_by_id = {
         repo_id: repository
-        for repository in app_installation.repositories or []
+        for repository in app_installation_repositories or []
         if (repo_id := repository_id(repository)) is not None
     }
     repositories_by_name = {
         repository.get("full_name"): repository
-        for repository in app_installation.repositories or []
+        for repository in app_installation_repositories or []
         if repository.get("full_name")
     }
     if not repositories_by_id and not repositories_by_name:
@@ -346,13 +356,13 @@ def user_can_access_installation_repositories(
     if accessible_repository_ids is None:
         return True
 
-    accessible_repository_ids = {
+    unique_accessible_repository_ids = {
         int(repo_id) for repo_id in accessible_repository_ids if repo_id is not None
     }
     repository_ids = {
         int(repo["id"]) for repo in repositories if repo.get("id") is not None
     }
-    return repository_ids.issubset(accessible_repository_ids)
+    return repository_ids.issubset(unique_accessible_repository_ids)
 
 
 def reconcile_selected_repository_applications(
@@ -364,14 +374,18 @@ def reconcile_selected_repository_applications(
     ):
         return 0
 
+    app_installation_repositories = cast(
+        "list[RepositoryMetadata]", app_installation.repositories
+    )
+
     repository_ids = {
         repository_id(repository)
-        for repository in app_installation.repositories
+        for repository in app_installation_repositories
         if repository_id(repository) is not None
     }
     repository_names = {
         repository.get("full_name")
-        for repository in app_installation.repositories
+        for repository in app_installation_repositories
         if repository.get("full_name")
     }
     project_ids = Project.query.with_entities(Project.id).filter_by(
@@ -443,7 +457,9 @@ def upsert_installation(
     app_installation.repository_selection = installation.get("repository_selection")
     if installed_by_user_id is not None:
         app_installation.installed_by_user_id = installed_by_user_id
-    app_installation.repositories = merge_repository_metadata([], repositories)
+    app_installation.repositories = cast(
+        list[dict[str, object]], merge_repository_metadata([], repositories)
+    )
     app_installation.repositories_synced_at = datetime.datetime.now(
         datetime.timezone.utc
     ).replace(tzinfo=None)

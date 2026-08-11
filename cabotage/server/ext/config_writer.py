@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
+    from typing import Any
+
+    from requests import Response
+
     from cabotage._types.server import TypedFlask
     from cabotage.server.ext.vault import Vault
     from cabotage.server.ext.consul import Consul
@@ -20,18 +24,23 @@ class ConfigWriter(object):
         app: TypedFlask | None = None,
         consul: Consul | None = None,
         vault: Vault | None = None,
-    ):
+    ) -> None:
         self.app = app
         self.consul = consul
         self.vault = vault
+        self.consul_prefix = "cabotage"
+        self.vault_prefix = "secret/cabotage"
+
         if app is not None:
             self.init_app(app, consul, vault)
 
-    def init_app(self, app: TypedFlask, consul: Consul | None, vault: Vault | None):
+    def init_app(
+        self, app: TypedFlask, consul: Consul | None, vault: Vault | None
+    ) -> None:
         self.consul = consul
         self.vault = vault
-        self.consul_prefix = app.config.get("CONSUL_PREFIX", "cabotage")
-        self.vault_prefix = app.config.get("VAULT_PREFIX", "secret/cabotage")
+        self.consul_prefix = app.config.get("CONSUL_PREFIX", self.consul_prefix)
+        self.vault_prefix = app.config.get("VAULT_PREFIX", self.vault_prefix)
 
         app.teardown_appcontext(self.teardown)
 
@@ -89,11 +98,17 @@ class ConfigWriter(object):
             "build_key_slug": f"{storage}:{build_key_name}",
         }
 
-    def read(self, key_slug: str, build: bool = False, secret: bool = False):
+    def read(
+        self, key_slug: str, build: bool = False, secret: bool = False
+    ) -> dict[str, Any] | Response | None:  # type: ignore[explicit-any] forced by vault
         if secret:
             if self.vault is None:
                 raise RuntimeError("No Vault extension configured!")
             return self.vault.vault_connection.read(key_slug)
         if self.consul is None:
             raise RuntimeError("No Consul extension configured!")
-        return self.consul.consul_connection.read(key_slug)
+        # FIXME: this is currently not an exercised code path
+        # the dict returned is different than the one from vault
+        # callsites rely on the fact that `data` is present
+        # which is not the case
+        return self.consul.consul_connection.kv.get(key_slug)

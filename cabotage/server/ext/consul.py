@@ -15,20 +15,29 @@ if TYPE_CHECKING:
 class Consul(object):
     def __init__(self, app: TypedFlask | None = None) -> None:
         self.app = app
+        self.consul_host = "127.0.0.1"
+        self.consul_port = 8500
+        self.consul_scheme = "http"
+        self.consul_verify = False
+        self.consul_cert: str | tuple[str, str] | None = None
+        self.consul_prefix = "cabotage"
+        self.consul_token_file = os.path.expanduser("~/.consul-token")
+        self.consul_token: str | None = None
+
         if app is not None:
             self.init_app(app)
 
     def init_app(self, app: TypedFlask) -> None:
-        self.consul_host = app.config.get("CONSUL_HOST", "127.0.0.1")
-        self.consul_port = app.config.get("CONSUL_PORT", "8500")
-        self.consul_scheme = app.config.get("CONSUL_SCHEME", "http")
-        self.consul_verify = app.config.get("CONSUL_VERIFY", False)
-        self.consul_cert = app.config.get("CONSUL_CERT", None)
-        self.consul_prefix = app.config.get("CONSUL_PREFIX", "cabotage")
+        self.consul_host = app.config.get("CONSUL_HOST", self.consul_host)
+        self.consul_port = app.config.get("CONSUL_PORT", self.consul_port)
+        self.consul_scheme = app.config.get("CONSUL_SCHEME", self.consul_scheme)
+        self.consul_verify = app.config.get("CONSUL_VERIFY", self.consul_verify)
+        self.consul_cert = app.config.get("CONSUL_CERT", self.consul_cert)
+        self.consul_prefix = app.config.get("CONSUL_PREFIX", self.consul_prefix)
         self.consul_token_file = app.config.get(
-            "CONSUL_TOKEN_FILE", os.path.expanduser("~/.consul-token")
+            "CONSUL_TOKEN_FILE", self.consul_token_file
         )
-        self.consul_token = app.config.get("CONSUL_TOKEN", None)
+        self.consul_token = app.config.get("CONSUL_TOKEN", self.consul_token)
 
         if self.consul_token is None:
             if os.path.exists(self.consul_token_file):

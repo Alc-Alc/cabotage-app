@@ -250,7 +250,7 @@ def _resolve_shared_references(
     """
     from cabotage.server.models.projects import EnvironmentConfiguration
 
-    env_configs = {
+    env_configs: dict[str, EnvironmentConfiguration] = {
         ec.name: ec
         for ec in EnvironmentConfiguration.query.filter_by(
             project_id=application_environment.application.project_id,
@@ -285,6 +285,7 @@ def _resolve_shared_references(
                     build=True,
                     secret=True,
                 )
+                assert isinstance(payload, dict)
                 return payload["data"][ec.name]
             raise TemplateResolutionError(
                 f"Shared secret '{var_name}' cannot be interpolated into a "

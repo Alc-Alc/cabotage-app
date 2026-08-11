@@ -14,12 +14,28 @@ from flask import g
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from logging import Logger
     from cabotage._types.server import TypedFlask
 
 
 class VaultDBCreds(object):
-    def __init__(self, app: TypedFlask | None = None):
+    def __init__(self, app: TypedFlask | None = None) -> None:
         self.app = app
+        self.vault_url = "http://127.0.0.1:8200"
+        self.vault_verify = False
+        self.vault_cert: tuple[str, str] | None = None
+        self.vault_token: str | None = None
+        self.vault_token_file = os.path.expanduser("~/.vault-token")
+        self.vault_token_unwrap = False
+        self.vault_db_database_uri: str | None = None
+        self.vault_db_creds_path = "database/creds/cabotage"
+        self.vault_lease_path = ""
+
+        self.rendered_uri: str | bytes | None = None
+        self.vault_lease_id: str | None = None
+        self.vault_lease_duration = -1
+        self.logger: Logger
+
         if app is not None:
             self.init_app(app)
 
@@ -27,23 +43,25 @@ class VaultDBCreds(object):
         if app.config.get("SQLALCHEMY_DATABASE_URI", None):
             return
         if app.config.get("VAULT_DB_CREDS_PATH", None):
-            self.vault_url = app.config.get("VAULT_URL", "http://127.0.0.1:8200")
-            self.vault_verify = app.config.get("VAULT_VERIFY", False)
-            self.vault_cert = app.config.get("VAULT_CERT", None)
-            self.vault_token = app.config.get("VAULT_TOKEN", None)
+            self.vault_url = app.config.get("VAULT_URL", self.vault_url)
+            self.vault_verify = app.config.get("VAULT_VERIFY", self.vault_verify)
+            self.vault_cert = app.config.get("VAULT_CERT", self.vault_cert)
+            self.vault_token = app.config.get("VAULT_TOKEN", self.vault_token)
             self.vault_token_file = app.config.get(
-                "VAULT_TOKEN_FILE", os.path.expanduser("~/.vault-token")
+                "VAULT_TOKEN_FILE", self.vault_token_file
             )
-            self.vault_token_unwrap = app.config.get("VAULT_TOKEN_UNWRAP", False)
-            self.vault_db_database_uri = app.config.get("VAULT_DB_DATABASE_URI", None)
+            self.vault_token_unwrap = app.config.get(
+                "VAULT_TOKEN_UNWRAP", self.vault_token_unwrap
+            )
+            self.vault_db_database_uri = app.config.get(
+                "VAULT_DB_DATABASE_URI", self.vault_db_database_uri
+            )
             self.vault_db_creds_path = app.config.get(
-                "VAULT_DB_CREDS_PATH", "database/creds/cabotage"
+                "VAULT_DB_CREDS_PATH", self.vault_db_creds_path
             )
-            self.vault_lease_path = app.config.get("VAULT_LEASE_PATH", "")
-
-            self.rendered_uri = None
-            self.vault_lease_id = None
-            self.vault_lease_duration = -1
+            self.vault_lease_path = app.config.get(
+                "VAULT_LEASE_PATH", self.vault_lease_path
+            )
 
             if self.vault_db_database_uri is None:
                 raise RuntimeError(
@@ -70,13 +88,18 @@ class VaultDBCreds(object):
 
         app.teardown_appcontext(self.teardown)
 
-    def revoke_credentials(self):
+    def revoke_credentials(self) -> None:
         self.logger.info(f"revoking {self.vault_lease_id} at shutdown")
-        self.connect_vault().write("sys/leases/revoke", lease_id=self.vault_lease_id)
+        self.connect_vault().write(
+            "sys/leases/revoke", None, lease_id=self.vault_lease_id
+        )
         self.logger.info(f"revoked {self.vault_lease_id}")
 
-    def fetch_database_credentials(self):
+    def fetch_database_credentials(self) -> None:
         response = self.vault_connection.read(self.vault_db_creds_path)
+        if not isinstance(response, dict):
+            raise Exception("invalid response not handled")
+        assert self.vault_db_database_uri
         parsed_uri = urlsplit(self.vault_db_database_uri)
         new_netloc = (
             f"{response['data']['username']}:{response['data']['password']}"
@@ -86,6 +109,7 @@ class VaultDBCreds(object):
         self.rendered_uri = constructed
         self.vault_lease_id = response["lease_id"]
         self.vault_lease_duration = response["lease_duration"]
+        assert self.vault_lease_id
         if os.path.exists(os.path.join(self.vault_lease_path, "leases")):
             lease_sha = hashlib.sha256(self.vault_lease_id.encode("utf-8")).hexdigest()
             with open(
@@ -103,7 +127,7 @@ class VaultDBCreds(object):
             )
         current_app.config["SQLALCHEMY_DATABASE_URI"] = constructed
 
-    def connect_vault(self):
+    def connect_vault(self) -> hvac.Client:
         vault_db_creds_client = hvac.Client(
             url=self.vault_url,
             token=self.vault_token,
@@ -116,7 +140,7 @@ class VaultDBCreds(object):
         g.pop("vault_db_creds_client", None)
 
     @property
-    def vault_connection(self):
+    def vault_connection(self) -> hvac.Client:
         if "vault_db_creds_client" not in g:
             g.vault_db_creds_client = self.connect_vault()
         return g.vault_db_creds_client

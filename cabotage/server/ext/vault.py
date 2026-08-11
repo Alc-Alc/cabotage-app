@@ -124,8 +124,9 @@ class Vault(object):
         )
         signature_response = cast(
             dict[str, Any],
-            self.vault_connection.write(  # type: ignore[missing-argument] # ty: ignore[missing-argument]
+            self.vault_connection.write(
                 VAULT_TRANSIT_SIGNING,
+                None,
                 input=b64encode(payload.encode()).decode(),
                 marshaling_algorithm=marshaling_algorithm,
             ),

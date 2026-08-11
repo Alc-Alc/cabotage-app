@@ -115,7 +115,7 @@ class GitHubApp(object):
     def install_url(self) -> str:
         return f"https://github.com/apps/{self.slug}/installations/new"
 
-    def fetch_installation_access_token(self, installation_id: str | int):
+    def fetch_installation_access_token(self, installation_id: str | int) -> str | None:
         try:
             resp = github_session.post(
                 f"https://api.github.com/app/installations/{installation_id}/access_tokens",

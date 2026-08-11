@@ -27,7 +27,7 @@ if TYPE_CHECKING:
         BUILDKITD_VERIFY: None
         CELERY_BROKER_URL: str
         CELERY_RESULT_BACKEND: str
-        CONSUL_CERT: None
+        CONSUL_CERT: NotRequired[str | tuple[str, str]]
         CONSUL_HOST: str
         CONSUL_PORT: int
         CONSUL_PREFIX: str
@@ -141,6 +141,8 @@ if TYPE_CHECKING:
         TENANT_POSTGRES_BACKUPS_ENABLED: bool
         VAULT_CERT: NotRequired[tuple[str, str]]
         VAULT_DB_CREDS_PATH: NotRequired[str]
+        VAULT_DB_DATABASE_URI: NotRequired[str]
+        VAULT_LEASE_PATH: NotRequired[str]
         VAULT_PREFIX: NotRequired[str]
         VAULT_SIGNING_KEY: NotRequired[str]
         VAULT_SIGNING_MOUNT: NotRequired[str]

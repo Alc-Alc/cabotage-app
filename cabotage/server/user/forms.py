@@ -363,8 +363,12 @@ class CreateConfigurationForm(FlaskForm):
         ).first()
         if configuration is not None:
             if (
-                cast(str, self.name.data).lower() != configuration.name.lower()
-            ):  # InputRequired has already run, so name.data is not None
+                cast(
+                    str,
+                    self.name.data,  # InputRequired has already run, so name.data is not None
+                ).lower()
+                != configuration.name.lower()
+            ):
                 return True
             raise ValidationError(
                 "Configuration names must be unique (case insensitive) "

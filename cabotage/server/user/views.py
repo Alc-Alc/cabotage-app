@@ -6380,8 +6380,9 @@ def organization_add_user(org_slug):
 
     if form.validate_on_submit():
         value = cast(
-            str, form.identity.data
-        ).strip()  # InputRequired has already run, so name.data is not None
+            str,
+            form.identity.data,  # InputRequired has already run, so identity.data is not None
+        ).strip()
         user = User.query.filter_by(email=value).first()
         if not user:
             # Resolve GitHub username to user ID via API, then match by ID

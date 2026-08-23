@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 from flask_security.forms import LoginForm, RegisterFormV2
 
@@ -343,25 +344,27 @@ class CreateConfigurationForm(FlaskForm):
         description="Set this Enviornment Variable during Image builds.",
     )
 
-    def validate_name(form, field):
+    def validate_name(self, field: StringField) -> bool:
         if field.data and field.data.upper() == "CABOTAGE_SENTINEL":
             raise ValidationError("This name is reserved.")
         app_env_id = None
-        env_id = form.environment_id.data or None
+        env_id = self.environment_id.data or None
         if env_id:
             app_env = ApplicationEnvironment.query.filter_by(
-                application_id=form.application_id.data,
+                application_id=self.application_id.data,
                 environment_id=env_id,
             ).first()
             if app_env:
                 app_env_id = app_env.id
         configuration = Configuration.query.filter_by(
-            application_id=form.application_id.data,
+            application_id=self.application_id.data,
             application_environment_id=app_env_id,
             name=field.data,
         ).first()
         if configuration is not None:
-            if form.name.data.lower() != configuration.name.lower():
+            if (
+                cast(str, self.name.data).lower() != configuration.name.lower()
+            ):  # InputRequired has already run, so name.data is not None
                 return True
             raise ValidationError(
                 "Configuration names must be unique (case insensitive) "

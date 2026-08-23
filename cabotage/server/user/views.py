@@ -4,6 +4,7 @@ import json
 import re
 import time
 import uuid
+from typing import cast
 
 from flask import (
     Blueprint,
@@ -2397,7 +2398,7 @@ def project_environment_configuration_delete(
     form.configuration_id.data = str(configuration.id)
     form.name.data = str(configuration.name)
     form.value.data = str(configuration.value)
-    form.secure.data = str(configuration.secret)
+    form.secure.data = configuration.secret
 
     if form.validate_on_submit():
         db.session.delete(configuration)
@@ -4837,7 +4838,7 @@ def project_application_configuration_delete(
     form.configuration_id.data = str(configuration.id)
     form.name.data = str(configuration.name)
     form.value.data = str(configuration.value)
-    form.secure.data = str(configuration.secret)
+    form.secure.data = configuration.secret
 
     env_slug = (
         configuration.application_environment.environment.slug
@@ -6378,7 +6379,9 @@ def organization_add_user(org_slug):
     all_users = User.query.all() if current_user.admin else None
 
     if form.validate_on_submit():
-        value = form.identity.data.strip()
+        value = cast(
+            str, form.identity.data
+        ).strip()  # InputRequired has already run, so name.data is not None
         user = User.query.filter_by(email=value).first()
         if not user:
             # Resolve GitHub username to user ID via API, then match by ID

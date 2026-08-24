@@ -4,7 +4,6 @@ import json
 import re
 import time
 import uuid
-from typing import cast
 
 from flask import (
     Blueprint,
@@ -168,6 +167,7 @@ from cabotage.utils.build_log_stream import (
 )
 
 from cabotage.utils import oidc
+from cabotage._types import assume_not_none
 
 _REGEX_META = re.compile(r"[.*+?{}()|\\^$\[\]]")
 
@@ -6379,9 +6379,8 @@ def organization_add_user(org_slug):
     all_users = User.query.all() if current_user.admin else None
 
     if form.validate_on_submit():
-        value = cast(
-            str,
-            form.identity.data,  # InputRequired has already run, so identity.data is not None
+        value = assume_not_none(
+            form.identity.data, because="InputRequired has already run"
         ).strip()
         user = User.query.filter_by(email=value).first()
         if not user:

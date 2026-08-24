@@ -1,5 +1,4 @@
 import uuid
-from typing import cast
 
 from flask_security.forms import LoginForm, RegisterFormV2
 
@@ -42,6 +41,7 @@ from cabotage.server.models.resources import (
     redis_size_classes,
 )
 from cabotage.server.models.utils import slugify
+from cabotage._types import assume_not_none
 
 BIGINT_MIN = -(2**63)
 BIGINT_MAX = 2**63 - 1
@@ -363,9 +363,8 @@ class CreateConfigurationForm(FlaskForm):
         ).first()
         if configuration is not None:
             if (
-                cast(
-                    str,
-                    self.name.data,  # InputRequired has already run, so name.data is not None
+                assume_not_none(
+                    self.name.data, because="InputRequired has already run"
                 ).lower()
                 != configuration.name.lower()
             ):

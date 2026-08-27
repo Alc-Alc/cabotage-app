@@ -8,8 +8,8 @@ them from the cluster.
 import datetime
 import os
 
-import kubernetes
-from kubernetes.client.rest import ApiException
+import kubernetes.client
+from kubernetes.client.exceptions import ApiException
 from sqlalchemy.exc import IntegrityError
 
 from celery import shared_task

@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, cast
 from celery import shared_task
 from base64 import b64encode, b64decode
 
-import kubernetes
+import kubernetes.client
 import toml
 
-from kubernetes.client.rest import ApiException
+from kubernetes.client.exceptions import ApiException
 
 from tempfile import (
     TemporaryDirectory,

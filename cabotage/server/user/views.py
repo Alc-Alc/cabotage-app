@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import collections
 import datetime
 import json
 import re
 import time
 import uuid
+from typing import TYPE_CHECKING, cast
 
 from flask import (
     Blueprint,
@@ -25,8 +28,10 @@ from flask_security import (
 from flask_wtf import FlaskForm
 from itsdangerous import BadData
 
-import kubernetes
-import kubernetes.stream.ws_client
+import kubernetes.client
+import kubernetes.stream
+from kubernetes.client.exceptions import ApiException
+from kubernetes.stream.ws_client import RESIZE_CHANNEL
 
 from dxf import DXF
 import requests as requests_lib
@@ -167,7 +172,16 @@ from cabotage.utils.build_log_stream import (
 )
 
 from cabotage.utils import oidc
-from cabotage._types import assume_not_none
+from cabotage._types import (
+    assume_not_none,
+    K8S_OBJECT_HAS_METADATA,
+    K8S_OBJECT_HAS_NAME,
+    K8S_OBJECT_HAS_NAMESPACE,
+    K8S_OBJECT_HAS_STATUS,
+)
+
+if TYPE_CHECKING:
+    from kubernetes.stream.ws_client import WSClient
 
 _REGEX_META = re.compile(r"[.*+?{}()|\\^$\[\]]")
 
@@ -3556,17 +3570,24 @@ def _shell_socket(ws, org_slug, project_slug, app_slug, env_slug=None):
 
     # =============================================================================== #
 
-    resp = kubernetes.stream.stream(
-        core_api_instance.connect_get_namespaced_pod_exec,
-        pod.metadata.name,
-        namespace=pod.metadata.namespace,
-        command=_shell_exec_command(),
-        container=process_name,
-        stderr=True,
-        stdin=True,
-        stdout=True,
-        tty=True,
-        _preload_content=False,
+    pod_metadata = assume_not_none(pod.metadata, because=K8S_OBJECT_HAS_METADATA)
+
+    resp = cast(  # stubs aren't perfect, `_preload_content=False` returns a client not a str
+        "WSClient",
+        kubernetes.stream.stream(
+            core_api_instance.connect_get_namespaced_pod_exec,
+            assume_not_none(pod_metadata.name, because=K8S_OBJECT_HAS_NAME),
+            namespace=assume_not_none(
+                pod_metadata.namespace, because=K8S_OBJECT_HAS_NAMESPACE
+            ),
+            command=_shell_exec_command(),
+            container=process_name,
+            stderr=True,
+            stdin=True,
+            stdout=True,
+            tty=True,
+            _preload_content=False,
+        ),
     )
 
     last_ping = time.monotonic()
@@ -3583,7 +3604,7 @@ def _shell_socket(ws, org_slug, project_slug, app_slug, env_slug=None):
             if data[0] == "\x00":
                 resp.write_stdin(data[1:])
             elif data[0] == "\x01":
-                resp.write_channel(kubernetes.stream.ws_client.RESIZE_CHANNEL, data[1:])
+                resp.write_channel(RESIZE_CHANNEL, data[1:])
         if data := resp.read_stdout(timeout=0.01):
             ws.send("\x00" + data)
         if data := resp.read_stderr(timeout=0.01):
@@ -8171,28 +8192,34 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
             label_selector=label_selector,
         )
         for pod in pod_list.items:
+            pod_metadata = assume_not_none(
+                pod.metadata, because=K8S_OBJECT_HAS_METADATA
+            )
+            pod_status = assume_not_none(pod.status, because=K8S_OBJECT_HAS_STATUS)
             # Skip terminating pods (deletionTimestamp is set)
-            if pod.metadata.deletion_timestamp is not None:
+            if pod_metadata.deletion_timestamp is not None:
                 continue
-            phase = pod.status.phase or "Unknown"
+            phase = pod_status.phase or "Unknown"
             # Skip completed/failed pods (e.g. finished Job runs)
             if phase in ("Succeeded", "Failed", "Completed"):
                 continue
             pods_by_phase[phase] = pods_by_phase.get(phase, 0) + 1
             pods_total += 1
             if phase == "Running":
-                running_pod_names.append(pod.metadata.name)
+                running_pod_names.append(
+                    assume_not_none(pod_metadata.name, because=K8S_OBJECT_HAS_NAME)
+                )
             is_ready = False
             is_crashed = False
-            if pod.status.conditions:
-                for cond in pod.status.conditions:
+            if pod_status.conditions:
+                for cond in pod_status.conditions:
                     if cond.type == "Ready" and cond.status == "True":
                         is_ready = True
                         pods_ready += 1
                         break
             # Detect crash: check container statuses for CrashLoopBackOff/Error
-            if not is_ready and pod.status.container_statuses:
-                for cs in pod.status.container_statuses:
+            if not is_ready and pod_status.container_statuses:
+                for cs in pod_status.container_statuses:
                     if cs.state and cs.state.waiting:
                         reason = cs.state.waiting.reason or ""
                         if reason in ("CrashLoopBackOff", "Error", "ImagePullBackOff"):
@@ -8201,7 +8228,7 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
                     if cs.state and cs.state.terminated:
                         is_crashed = True
                         break
-            proc = (pod.metadata.labels or {}).get("process", "unknown")
+            proc = (pod_metadata.labels or {}).get("process", "unknown")
             if proc not in processes:
                 processes[proc] = {"total": 0, "ready": 0, "pending": 0, "crashed": 0}
             processes[proc]["total"] += 1
@@ -8211,7 +8238,7 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
                 processes[proc]["crashed"] += 1
             else:
                 processes[proc]["pending"] += 1
-    except (kubernetes.client.ApiException, Exception):
+    except (ApiException, Exception):
         current_app.logger.debug("Failed to list pods for live stats", exc_info=True)
 
     end = int(time.time())

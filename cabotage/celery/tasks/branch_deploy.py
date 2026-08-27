@@ -6,7 +6,7 @@ import re
 from copy import deepcopy
 
 from flask import current_app
-from kubernetes.client.rest import ApiException
+from kubernetes.client.exceptions import ApiException
 
 from cabotage.server import (
     db,
@@ -234,7 +234,7 @@ def _precreate_ingresses(environment: Environment) -> None:
     Called before image builds start so that cert-manager can begin issuing
     TLS certificates while builds run in parallel.
     """
-    import kubernetes
+    import kubernetes.client
 
     from cabotage.celery.tasks.deploy import (
         ensure_cabotage_ca_configmap,
@@ -308,7 +308,7 @@ def _precreate_ingresses(environment: Environment) -> None:
 
 def _teardown_environment(environment: Environment) -> None:
     """Delete k8s namespace and all DB records for an ephemeral environment."""
-    import kubernetes
+    import kubernetes.client
 
     from cabotage.celery.tasks.build import (
         _build_namespace,

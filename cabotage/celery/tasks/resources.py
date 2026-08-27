@@ -6,10 +6,11 @@ import secrets
 import struct
 from collections.abc import Mapping
 
-import kubernetes
+import kubernetes.client
+from kubernetes.client.api_client import ApiClient
 from celery import shared_task
 from flask import current_app, has_app_context
-from kubernetes.client.rest import ApiException
+from kubernetes.client.exceptions import ApiException
 from sqlalchemy import text
 
 from cabotage.server import (
@@ -108,7 +109,7 @@ def _serialize_k8s_object(obj):
         return [_serialize_k8s_object(item) for item in obj]
     if isinstance(obj, Mapping):
         return {key: _serialize_k8s_object(value) for key, value in obj.items()}
-    return kubernetes.client.ApiClient().sanitize_for_serialization(obj)
+    return ApiClient().sanitize_for_serialization(obj)
 
 
 def _extract_desired_subset(current, desired):

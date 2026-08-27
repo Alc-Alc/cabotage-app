@@ -1,7 +1,7 @@
 import datetime
 import logging
 
-import kubernetes
+import kubernetes.client
 
 from celery import shared_task
 from flask import current_app

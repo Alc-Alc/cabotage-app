@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 import collections
 import datetime
 import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, cast
 
 from flask import (
     Blueprint,
@@ -28,26 +25,8 @@ from flask_security import (
 from flask_wtf import FlaskForm
 from itsdangerous import BadData
 
-from kubernetes.client import (
-    BatchV1Api,
-    CoreV1Api,
-    V1Container,
-    V1EnvVar,
-    V1Job,
-    V1JobSpec,
-    V1ObjectMeta,
-    V1PersistentVolumeClaimVolumeSource,
-    V1PodSecurityContext,
-    V1PodSpec,
-    V1PodTemplateSpec,
-    V1SeccompProfile,
-    V1SecurityContext,
-    V1Volume,
-    V1VolumeMount,
-)
-from kubernetes.client.exceptions import ApiException
-from kubernetes.stream import stream as k8_stream
-from kubernetes.stream.ws_client import RESIZE_CHANNEL
+import kubernetes
+import kubernetes.stream.ws_client
 
 from dxf import DXF
 import requests as requests_lib
@@ -188,16 +167,7 @@ from cabotage.utils.build_log_stream import (
 )
 
 from cabotage.utils import oidc
-from cabotage._types import (
-    assume_not_none,
-    K8S_OBJECT_HAS_METADATA,
-    K8S_OBJECT_HAS_NAME,
-    K8S_OBJECT_HAS_NAMESPACE,
-    K8S_OBJECT_HAS_STATUS,
-)
-
-if TYPE_CHECKING:
-    from kubernetes.stream.ws_client import WSClient
+from cabotage._types import assume_not_none
 
 _REGEX_META = re.compile(r"[.*+?{}()|\\^$\[\]]")
 
@@ -3555,7 +3525,7 @@ def _shell_socket(ws, org_slug, project_slug, app_slug, env_slug=None):
     db.session.remove()
 
     api_client = kubernetes_ext.kubernetes_client
-    core_api_instance = CoreV1Api(api_client)
+    core_api_instance = kubernetes.client.CoreV1Api(api_client)
 
     # =============================================================================== #
     #  everything below should be replaced with the creation/monitoring of a new pod  #
@@ -3586,24 +3556,17 @@ def _shell_socket(ws, org_slug, project_slug, app_slug, env_slug=None):
 
     # =============================================================================== #
 
-    pod_metadata = assume_not_none(pod.metadata, because=K8S_OBJECT_HAS_METADATA)
-
-    resp = cast(  # stubs aren't perfect, `_preload_content=False` returns a client not a str
-        "WSClient",
-        k8_stream(
-            core_api_instance.connect_get_namespaced_pod_exec,
-            assume_not_none(pod_metadata.name, because=K8S_OBJECT_HAS_NAME),
-            namespace=assume_not_none(
-                pod_metadata.namespace, because=K8S_OBJECT_HAS_NAMESPACE
-            ),
-            command=_shell_exec_command(),
-            container=process_name,
-            stderr=True,
-            stdin=True,
-            stdout=True,
-            tty=True,
-            _preload_content=False,
-        ),
+    resp = kubernetes.stream.stream(
+        core_api_instance.connect_get_namespaced_pod_exec,
+        pod.metadata.name,
+        namespace=pod.metadata.namespace,
+        command=_shell_exec_command(),
+        container=process_name,
+        stderr=True,
+        stdin=True,
+        stdout=True,
+        tty=True,
+        _preload_content=False,
     )
 
     last_ping = time.monotonic()
@@ -3620,7 +3583,7 @@ def _shell_socket(ws, org_slug, project_slug, app_slug, env_slug=None):
             if data[0] == "\x00":
                 resp.write_stdin(data[1:])
             elif data[0] == "\x01":
-                resp.write_channel(RESIZE_CHANNEL, data[1:])
+                resp.write_channel(kubernetes.stream.ws_client.RESIZE_CHANNEL, data[1:])
         if data := resp.read_stdout(timeout=0.01):
             ws.send("\x00" + data)
         if data := resp.read_stderr(timeout=0.01):
@@ -5987,8 +5950,8 @@ def application_clear_cache(org_slug, project_slug, app_slug):
     repository_name = application.registry_repository_name(app_env)
 
     api_client = kubernetes_ext.kubernetes_client
-    core_api_instance = CoreV1Api(api_client)
-    batch_api_instance = BatchV1Api(api_client)
+    core_api_instance = kubernetes.client.CoreV1Api(api_client)
+    batch_api_instance = kubernetes.client.BatchV1Api(api_client)
     image = application.images.first()
     if image is not None and current_app.config["KUBERNETES_ENABLED"]:
         from cabotage.celery.tasks.deploy import run_job
@@ -6004,8 +5967,8 @@ def application_clear_cache(org_slug, project_slug, app_slug):
 
         volume_claim = fetch_image_build_cache_volume_claim(core_api_instance, image)
         safe_labels = _safe_labels_from_application(image.application)
-        job_object = V1Job(
-            metadata=V1ObjectMeta(
+        job_object = kubernetes.client.V1Job(
+            metadata=kubernetes.client.V1ObjectMeta(
                 name=f"clear-cache-{volume_claim.metadata.name}"[:63],
                 labels={
                     "organization": image.application.project.organization.slug,
@@ -6016,13 +5979,13 @@ def application_clear_cache(org_slug, project_slug, app_slug):
                     **safe_labels,
                 },
             ),
-            spec=V1JobSpec(
+            spec=kubernetes.client.V1JobSpec(
                 active_deadline_seconds=1800,
                 backoff_limit=0,
                 parallelism=1,
                 completions=1,
-                template=V1PodTemplateSpec(
-                    metadata=V1ObjectMeta(
+                template=kubernetes.client.V1PodTemplateSpec(
+                    metadata=kubernetes.client.V1ObjectMeta(
                         labels={
                             "organization": image.application.project.organization.slug,  # noqa: E501
                             "project": image.application.project.slug,
@@ -6036,33 +5999,33 @@ def application_clear_cache(org_slug, project_slug, app_slug):
                             "container.apparmor.security.beta.kubernetes.io/clear-cache": "unconfined",  # noqa: E501
                         },
                     ),
-                    spec=V1PodSpec(
+                    spec=kubernetes.client.V1PodSpec(
                         restart_policy="Never",
-                        security_context=V1PodSecurityContext(
+                        security_context=kubernetes.client.V1PodSecurityContext(
                             fs_group=1000,
                             fs_group_change_policy="OnRootMismatch",
                         ),
                         containers=[
-                            V1Container(
+                            kubernetes.client.V1Container(
                                 name="clear-cache",
                                 image=buildkit_image,
                                 command=["buildctl-daemonless.sh"],
                                 args=["prune", "--all"],
                                 env=[
-                                    V1EnvVar(
+                                    kubernetes.client.V1EnvVar(
                                         name="BUILDKITD_FLAGS",
                                         value="--oci-worker-no-process-sandbox",  # noqa: E501
                                     ),
                                 ],
-                                security_context=V1SecurityContext(
-                                    seccomp_profile=V1SeccompProfile(
+                                security_context=kubernetes.client.V1SecurityContext(
+                                    seccomp_profile=kubernetes.client.V1SeccompProfile(
                                         type="Unconfined",
                                     ),
                                     run_as_user=1000,
                                     run_as_group=1000,
                                 ),
                                 volume_mounts=[
-                                    V1VolumeMount(
+                                    kubernetes.client.V1VolumeMount(
                                         mount_path="/home/user/.local/share/buildkit",
                                         name="build-cache",
                                     ),
@@ -6070,9 +6033,9 @@ def application_clear_cache(org_slug, project_slug, app_slug):
                             ),
                         ],
                         volumes=[
-                            V1Volume(
+                            kubernetes.client.V1Volume(
                                 name="build-cache",
-                                persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                                persistent_volume_claim=kubernetes.client.V1PersistentVolumeClaimVolumeSource(
                                     claim_name=volume_claim.metadata.name
                                 ),
                             ),
@@ -8197,7 +8160,7 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
     processes = {}  # {process_name: {"total": N, "ready": N, "pending": N, "crashed": N}}
     try:
         api_client = kubernetes_ext.kubernetes_client
-        core_api = CoreV1Api(api_client)
+        core_api = kubernetes.client.CoreV1Api(api_client)
         label_selector = (
             f"organization={application.project.organization.slug},"
             f"project={application.project.slug},"
@@ -8209,33 +8172,27 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
         )
         for pod in pod_list.items:
             # Skip terminating pods (deletionTimestamp is set)
-            pod_metadata = assume_not_none(
-                pod.metadata, because=K8S_OBJECT_HAS_METADATA
-            )
-            pod_status = assume_not_none(pod.status, because=K8S_OBJECT_HAS_STATUS)
-            if pod_metadata.deletion_timestamp is not None:
+            if pod.metadata.deletion_timestamp is not None:
                 continue
-            phase = pod_status.phase or "Unknown"
+            phase = pod.status.phase or "Unknown"
             # Skip completed/failed pods (e.g. finished Job runs)
             if phase in ("Succeeded", "Failed", "Completed"):
                 continue
             pods_by_phase[phase] = pods_by_phase.get(phase, 0) + 1
             pods_total += 1
             if phase == "Running":
-                running_pod_names.append(
-                    assume_not_none(pod_metadata.name, because=K8S_OBJECT_HAS_NAME)
-                )
+                running_pod_names.append(pod.metadata.name)
             is_ready = False
             is_crashed = False
-            if pod_status.conditions:
-                for cond in pod_status.conditions:
+            if pod.status.conditions:
+                for cond in pod.status.conditions:
                     if cond.type == "Ready" and cond.status == "True":
                         is_ready = True
                         pods_ready += 1
                         break
             # Detect crash: check container statuses for CrashLoopBackOff/Error
-            if not is_ready and pod_status.container_statuses:
-                for cs in pod_status.container_statuses:
+            if not is_ready and pod.status.container_statuses:
+                for cs in pod.status.container_statuses:
                     if cs.state and cs.state.waiting:
                         reason = cs.state.waiting.reason or ""
                         if reason in ("CrashLoopBackOff", "Error", "ImagePullBackOff"):
@@ -8244,7 +8201,7 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
                     if cs.state and cs.state.terminated:
                         is_crashed = True
                         break
-            proc = (pod_metadata.labels or {}).get("process", "unknown")
+            proc = (pod.metadata.labels or {}).get("process", "unknown")
             if proc not in processes:
                 processes[proc] = {"total": 0, "ready": 0, "pending": 0, "crashed": 0}
             processes[proc]["total"] += 1
@@ -8254,7 +8211,7 @@ def project_application_live_stats(org_slug, project_slug, app_slug, env_slug=No
                 processes[proc]["crashed"] += 1
             else:
                 processes[proc]["pending"] += 1
-    except (ApiException, Exception):
+    except (kubernetes.client.ApiException, Exception):
         current_app.logger.debug("Failed to list pods for live stats", exc_info=True)
 
     end = int(time.time())

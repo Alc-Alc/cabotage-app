@@ -1,36 +1,30 @@
-from __future__ import annotations
-from typing import TYPE_CHECKING, cast
-
 from flask import g
 
-from kubernetes.client.api_client import ApiClient
-from kubernetes.config import load_incluster_config, load_kube_config
-
-if TYPE_CHECKING:
-    from flask import Flask
+import kubernetes
 
 
 class Kubernetes(object):
-    def __init__(self, app: Flask | None = None) -> None:
+    def __init__(self, app=None):
         self.app = app
         if app is not None:
             self.init_app(app)
 
-    def init_app(self, app: Flask):
+    def init_app(self, app):
         try:
-            load_incluster_config()
+            kubernetes.config.load_incluster_config()
         except Exception:
             try:
-                # FIXME: Remove once "typed config" is implemented
-                load_kube_config(context=cast(str, app.config["KUBERNETES_CONTEXT"]))
+                kubernetes.config.load_kube_config(
+                    context=app.config["KUBERNETES_CONTEXT"]
+                )
             except Exception:
                 if app.config["KUBERNETES_ENABLED"]:
                     raise
 
-        _ = app.teardown_appcontext(self.teardown)
+        app.teardown_appcontext(self.teardown)
 
     def connect_kubernetes(self):
-        kubernetes_client = ApiClient()
+        kubernetes_client = kubernetes.client.ApiClient()
         return kubernetes_client
 
     def teardown(self, exception):

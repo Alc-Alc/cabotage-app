@@ -8,8 +8,8 @@ them from the cluster.
 import datetime
 import os
 
-import kubernetes
-from kubernetes.client.rest import ApiException
+import kubernetes.client
+from kubernetes.client.exceptions import ApiException
 from sqlalchemy.exc import IntegrityError
 
 from celery import shared_task
@@ -78,7 +78,9 @@ def _extract_resources(job):
     return None
 
 
-def _resolve_app_env(labels):
+def _resolve_app_env(
+    labels: dict[str, str],
+) -> tuple[Application, ApplicationEnvironment] | tuple[None, None]:
     """Look up Application and ApplicationEnvironment from job labels."""
     org_slug = labels.get("organization")
     project_slug = labels.get("project")
@@ -152,6 +154,16 @@ def reap_finished_jobs():
             break
 
         if not _is_finished(job):
+            continue
+
+        if job.metadata is None or job.metadata.name is None:
+            current_app.logger.exception("Skipping unamed job")
+            continue
+
+        if job.status is None:
+            current_app.logger.exception(
+                "Skipping statusless job in %s", job.metadata.namespace
+            )
             continue
 
         labels = job.metadata.labels or {}

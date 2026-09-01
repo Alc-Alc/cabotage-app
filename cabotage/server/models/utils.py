@@ -26,7 +26,7 @@ def generate_k8s_identifier(slug, hex_bytes=4):
     return f"{prefix}-{hex_suffix}"
 
 
-def safe_k8s_name(*parts, max_len=63):
+def safe_k8s_name(*parts: str, max_len: int = 63) -> str:
     """Join parts with hyphens, truncating with a hash suffix if too long."""
     name = "-".join(parts)
     if len(name) <= max_len:
